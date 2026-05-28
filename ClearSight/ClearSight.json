@@ -1,12 +1,13 @@
 {
-  "Author": "your name here",
-  "Name": "Sample Plugin",
-  "Punchline": "A short one-liner that shows up in /xlplugins.",
-  "Description": "A description that shows up in /xlplugins. List any major slash-command(s).",
+  "Author": "unremarkably",
+  "Name": "Clear Sight",
+  "Punchline": "Customizable on-screen cooldown bars.",
+  "Description": "Adds customizable on-screen bars that track your action cooldowns at a glance. Toggle the main window with /clearsight.",
+  "InternalName": "ClearSight",
   "ApplicableVersion": "any",
   "Tags": [
-    "sample",
-    "plugin",
-    "goats"
+    "ui",
+    "combat",
+    "hud"
   ]
 }
