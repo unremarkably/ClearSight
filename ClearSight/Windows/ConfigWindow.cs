@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -7,53 +7,55 @@ namespace ClearSight.Windows;
 
 public class ConfigWindow : Window, IDisposable
 {
-    private readonly Configuration configuration;
+    private readonly Configuration config;
 
-    // We give this window a constant ID using ###.
-    // This allows for labels to be dynamic, like "{FPS Counter}fps###XYZ counter window",
-    // and the window ID will always be "###XYZ counter window" for ImGui
-    public ConfigWindow(Plugin plugin) : base("A Wonderful Configuration Window###With a constant ID")
+    public ConfigWindow(Plugin plugin) : base("ClearSight Settings###ClearSightConfig")
     {
-        Flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar |
-                ImGuiWindowFlags.NoScrollWithMouse;
-
-        Size = new Vector2(232, 90);
-        SizeCondition = ImGuiCond.Always;
-
-        configuration = plugin.Configuration;
+        Flags = ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysAutoResize;
+        config = plugin.Configuration;
     }
 
     public void Dispose() { }
 
-    public override void PreDraw()
-    {
-        // Flags must be added or removed before Draw() is being called, or they won't apply
-        if (configuration.IsConfigWindowMovable)
-        {
-            Flags &= ~ImGuiWindowFlags.NoMove;
-        }
-        else
-        {
-            Flags |= ImGuiWindowFlags.NoMove;
-        }
-    }
-
     public override void Draw()
     {
-        // Can't ref a property, so use a local copy
-        var configValue = configuration.SomePropertyToBeSavedAndWithADefault;
-        if (ImGui.Checkbox("Random Config Bool", ref configValue))
+        var showOverlay = config.ShowOverlay;
+        if (ImGui.Checkbox("Show cooldown bars", ref showOverlay))
         {
-            configuration.SomePropertyToBeSavedAndWithADefault = configValue;
-            // Can save immediately on change if you don't want to provide a "Save and Close" button
-            configuration.Save();
+            config.ShowOverlay = showOverlay;
+            config.Save();
         }
 
-        var movable = configuration.IsConfigWindowMovable;
-        if (ImGui.Checkbox("Movable Config Window", ref movable))
+        var locked = config.Locked;
+        if (ImGui.Checkbox("Lock position", ref locked))
         {
-            configuration.IsConfigWindowMovable = movable;
-            configuration.Save();
+            config.Locked = locked;
+            config.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Stops the bars from being dragged so they stay put while you play.");
+
+        var hideReady = config.HideReadyActions;
+        if (ImGui.Checkbox("Hide actions that are ready", ref hideReady))
+        {
+            config.HideReadyActions = hideReady;
+            config.Save();
+        }
+
+        ImGui.Separator();
+
+        var barSize = config.BarSize;
+        if (ImGui.DragFloat2("Bar size", ref barSize, 1f, 20f, 600f))
+        {
+            config.BarSize = barSize;
+            config.Save();
+        }
+
+        var spacing = config.BarSpacing;
+        if (ImGui.DragFloat("Spacing", ref spacing, 0.5f, 0f, 40f))
+        {
+            config.BarSpacing = spacing;
+            config.Save();
         }
     }
 }

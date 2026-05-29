@@ -5,22 +5,15 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace ClearSight;
 
-// ============================================================================
-//  CooldownService
-// ----------------------------------------------------------------------------
-//  This is the FFXIV-specific core of the plugin. Dalamud does NOT expose
-//  recast (cooldown) timers through a clean managed API, so we drop into
-//  "stage 2" of Dalamud's interaction model: FFXIVClientStructs, which ships
-//  with Dalamud and lets us treat the game's own ActionManager as a library.
-//
-//  Everything unsafe/pointer-y is quarantined in THIS file. When a game patch
-//  or API bump breaks cooldown reading, this is the (only) file you patch.
-//  The config and render layers never touch ActionManager directly.
-// ============================================================================
+// Dalamud doesn't hand us cooldown timers through a tidy managed API, so we
+// reach into FFXIVClientStructs (which ships with Dalamud) and read the game's
+// own ActionManager directly. All the unsafe pointer work lives here and
+// nowhere else — when a game patch shifts these structs around, this is the one
+// file that needs fixing. Everything above it only ever sees CooldownInfo.
 
 /// <summary>
-/// A clean, managed snapshot of one action's cooldown state for a single frame.
-/// The render layer consumes only this — never ActionManager pointers.
+/// A snapshot of one action's cooldown for a single frame — the only thing the
+/// rest of the plugin sees, so nothing else has to touch raw game memory.
 /// </summary>
 public readonly struct CooldownInfo
 {
@@ -45,9 +38,9 @@ public readonly struct CooldownInfo
 }
 
 /// <summary>
-/// Reads action cooldowns from the game each frame and exposes them as managed
-/// structs. Tracks an explicit user-chosen set of action IDs AND can be asked
-/// for the current job's actions on demand (the "Both — flexible" model).
+/// Reads action cooldowns from the game each frame. It keeps a set of action
+/// IDs we currently care about — for now that's filled in by hand, and the plan
+/// is to populate it automatically from the player's job.
 /// </summary>
 public sealed unsafe class CooldownService : IDisposable
 {
@@ -55,7 +48,6 @@ public sealed unsafe class CooldownService : IDisposable
     private readonly IDataManager dataManager;
     private readonly IPluginLog log;
 
-    // The explicit watch-list the user has configured (specific action IDs).
     private readonly HashSet<uint> trackedActionIds = new();
 
     public CooldownService(IClientState clientState, IDataManager dataManager, IPluginLog log)
@@ -65,18 +57,13 @@ public sealed unsafe class CooldownService : IDisposable
         this.log = log;
     }
 
-    // ---- Watch-list management (used by the config layer) ------------------
-
     public void Track(uint actionId)   => trackedActionIds.Add(actionId);
     public void Untrack(uint actionId) => trackedActionIds.Remove(actionId);
     public IReadOnlyCollection<uint> Tracked => trackedActionIds;
 
-    // ---- The core read ------------------------------------------------------
-
     /// <summary>
-    /// Reads the live cooldown state for a single action.
-    /// Returns null only if the game/ActionManager isn't available
-    /// (e.g. at the title screen).
+    /// The live cooldown for one action, or null when the game isn't ready to
+    /// answer (the title screen, mid-load, that sort of thing).
     /// </summary>
     public CooldownInfo? GetCooldown(uint actionId)
     {
@@ -84,17 +71,15 @@ public sealed unsafe class CooldownService : IDisposable
         if (am == null)
             return null;
 
-        // Actions share "recast groups" — many oGCDs map to a group, and the
-        // GCD shares one group across the whole rotation. We ask the game which
-        // group this action belongs to, then read that group's timer.
-        //
-        // GetRecastGroup wants the action TYPE and the action ID. For player
-        // abilities/spells/weaponskills this is ActionType.Action.
+        // Cooldowns aren't tracked per-action but per "recast group": every oGCD
+        // belongs to one, and the whole GCD rotation shares a single group. So we
+        // ask the game which group this action falls into, then read that group's
+        // timer. Player skills are always ActionType.Action.
         var recastGroup = am->GetRecastGroup((int)ActionType.Action, actionId);
 
-        // GetRecastGroupDetail returns a pointer to the live timer struct.
-        // IsActive != 0 means the cooldown is currently ticking.
-        // Total  = full recast length, Elapsed = how far through we are.
+        // The detail struct is where the timer actually lives: Total is the full
+        // recast, Elapsed is how far we've progressed, and IsActive tells us
+        // whether it's counting at all.
         var detail = am->GetRecastGroupDetail(recastGroup);
 
         float total = 0f, elapsed = 0f;
@@ -106,8 +91,8 @@ public sealed unsafe class CooldownService : IDisposable
 
         float remaining = Math.Max(0f, total - elapsed);
 
-        // Charge-based actions (most modern oGCDs) — the game exposes current
-        // and max stacks separately. For non-charge actions both come back as 1.
+        // Most modern oGCDs bank charges; the game reports current and max stacks
+        // separately. Actions without charges just report 1 of 1.
         ushort maxCharges = ActionManager.GetMaxCharges(actionId, 0);
         ushort currentCharges = (ushort)am->GetCurrentCharges(actionId);
 
@@ -122,8 +107,8 @@ public sealed unsafe class CooldownService : IDisposable
     }
 
     /// <summary>
-    /// Snapshot of every action on the explicit watch-list. Call once per frame
-    /// from your draw loop, iterate the result to draw bars.
+    /// Every tracked action's cooldown for this frame. Call it once per draw and
+    /// loop the result to paint the bars.
     /// </summary>
     public List<CooldownInfo> SnapshotTracked()
     {
@@ -139,10 +124,8 @@ public sealed unsafe class CooldownService : IDisposable
 
     public void Dispose()
     {
-        // Nothing unmanaged is *owned* here (ActionManager is the game's, not
-        // ours), so there's nothing to free. The method exists so the service
-        // fits the same disposable lifecycle as the rest of the plugin and so
-        // future additions (hooks, etc.) have a home to clean up in.
+        // We don't own any of the game's memory, so there's nothing to free yet.
+        // This is just a tidy home for cleanup once we add hooks or events.
         trackedActionIds.Clear();
     }
 }
