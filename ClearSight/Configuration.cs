@@ -35,6 +35,24 @@ public class Configuration : IPluginConfiguration
     public bool ShowParty { get; set; } = true;
     public bool PartyLocked { get; set; } = false;
 
+    // The header is the "ClearSight — Party" title plus the filter chips. The
+    // title collapses the chips; the whole header can be hidden to stay tidy.
+    public bool PartyHeaderVisible { get; set; } = true;
+    public bool PartyFiltersCollapsed { get; set; } = false;
+
+    // HP/MP readout: real numbers with the percent alongside (the user's group
+    // talks in real numbers), falling back to percent-only when space is tight.
+    public bool ShowHpNumbers { get; set; } = true;
+    public bool ShowMpValue { get; set; } = true;
+
+    // Which statuses earn an icon. Your barriers always show; these gate the rest.
+    public bool ShowBuffs { get; set; } = true;
+    public bool ShowDebuffs { get; set; } = true;
+
+    // Drops always-on statuses (Kardia, FC buffs, food-style permanents) so the
+    // row only carries things that are actually counting down.
+    public bool HidePermanentStatuses { get; set; } = true;
+
     // A temporary aid while we nail down exactly which statuses to watch: lists
     // every buff/debuff on each member with its raw ID, so we can confirm the
     // real barrier IDs against the live game.

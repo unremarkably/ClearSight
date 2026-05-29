@@ -5,6 +5,7 @@ using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using ClearSight.Windows;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 
 namespace ClearSight;
 
@@ -16,6 +17,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IPartyList PartyList { get; private set; } = null!;
     [PluginService] internal static IObjectTable Objects { get; private set; } = null!;
+    [PluginService] internal static ITargetManager Targets { get; private set; } = null!;
+    [PluginService] internal static ITextureProvider Textures { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/clearsight";
@@ -107,5 +110,27 @@ public sealed class Plugin : IDalamudPlugin
         Configuration.ShowParty = visible;
         Configuration.Save();
         PartyWindow.IsOpen = visible;
+    }
+
+    // The party panel's interactions, the same ones the native frames give you.
+    // Each resolves the member fresh from their entity id, so a stale snapshot
+    // can never point us at the wrong character.
+    public void TargetMember(uint entityId)
+    {
+        var obj = Objects.SearchByEntityId(entityId);
+        if (obj != null)
+            Targets.Target = obj;
+    }
+
+    public void FocusMember(uint entityId)
+    {
+        var obj = Objects.SearchByEntityId(entityId);
+        if (obj != null)
+            Targets.FocusTarget = obj;
+    }
+
+    public unsafe void ExamineMember(uint entityId)
+    {
+        AgentInspect.Instance()->ExamineCharacter(entityId, false);
     }
 }

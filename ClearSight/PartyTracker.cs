@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using LuminaClassJob = Lumina.Excel.Sheets.ClassJob;
 using LuminaStatus = Lumina.Excel.Sheets.Status;
 
 namespace ClearSight;
@@ -12,6 +13,10 @@ public readonly struct StatusInfo
 {
     public uint StatusId { get; init; }
     public string Name { get; init; }
+
+    /// <summary>The in-game status icon, drawn the same as it appears on your buff bar.</summary>
+    public uint IconId { get; init; }
+
     public float RemainingTime { get; init; }
     public ushort Stacks { get; init; }
 
@@ -20,22 +25,47 @@ public readonly struct StatusInfo
 
     /// <summary>True for the Sage barriers/regens we specifically watch for.</summary>
     public bool IsTracked { get; init; }
+
+    /// <summary>True for debuffs, false for buffs — drives the buff/debuff filters.</summary>
+    public bool IsDebuff { get; init; }
+
+    /// <summary>Always-on statuses (permanent links, FC buffs) the "hide permanent" filter drops.</summary>
+    public bool IsPermanent { get; init; }
 }
 
 // A single party member as the panel sees them.
 public readonly struct PartyMemberInfo
 {
     public string Name { get; init; }
+    public string Job { get; init; }
+
+    /// <summary>The ClassJob row id, used to fetch the job icon.</summary>
     public uint JobId { get; init; }
+
+    /// <summary>Used to look the member up again when you click to target them.</summary>
+    public uint EntityId { get; init; }
+
+    /// <summary>The ClassJob role: 1 tank, 2/3 dps, 4 healer, 0 other.</summary>
+    public byte Role { get; init; }
+
+    /// <summary>True for the local player's own entry.</summary>
+    public bool IsSelf { get; init; }
+
     public uint CurrentHp { get; init; }
     public uint MaxHp { get; init; }
+    public uint CurrentMp { get; init; }
+    public uint MaxMp { get; init; }
 
     /// <summary>The yellow overshield on the HP bar, 0-100, from any source.</summary>
     public byte ShieldPercent { get; init; }
 
+    /// <summary>True when at least one of your barriers is currently on them.</summary>
+    public bool HasMyBarrier { get; init; }
+
     public IReadOnlyList<StatusInfo> Statuses { get; init; }
 
     public float HpFraction => MaxHp == 0 ? 0f : (float)CurrentHp / MaxHp;
+    public float MpFraction => MaxMp == 0 ? 0f : (float)CurrentMp / MaxMp;
 }
 
 /// <summary>
@@ -98,34 +128,80 @@ public sealed class PartyTracker
             var statusSource = chara?.StatusList ?? member.Statuses;
 
             var statuses = new List<StatusInfo>();
+            var hasMyBarrier = false;
             foreach (var status in statusSource)
             {
                 if (status.StatusId == 0)
                     continue;
 
+                var isMine = status.SourceId == mine;
+                var isTracked = tracked.Contains(status.StatusId);
+                if (isMine && isTracked)
+                    hasMyBarrier = true;
+
+                var sheet = LookupStatus(status.StatusId);
                 statuses.Add(new StatusInfo
                 {
                     StatusId = status.StatusId,
-                    Name = StatusName(status.StatusId),
+                    Name = sheet.Name,
+                    IconId = sheet.Icon,
                     RemainingTime = Math.Abs(status.RemainingTime),
                     Stacks = status.Param,
-                    Mine = status.SourceId == mine,
-                    IsTracked = tracked.Contains(status.StatusId),
+                    Mine = isMine,
+                    IsTracked = isTracked,
+                    IsDebuff = sheet.IsDebuff,
+                    IsPermanent = sheet.IsPermanent,
                 });
             }
+
+            var job = LookupJob(member.ClassJob.RowId);
 
             members.Add(new PartyMemberInfo
             {
                 Name = member.Name.ToString(),
+                Job = job.Abbreviation,
                 JobId = member.ClassJob.RowId,
+                EntityId = member.EntityId,
+                Role = job.Role,
+                IsSelf = member.EntityId == mine,
                 CurrentHp = member.CurrentHP,
                 MaxHp = member.MaxHP,
+                CurrentMp = member.CurrentMP,
+                MaxMp = member.MaxMP,
                 ShieldPercent = chara?.ShieldPercentage ?? 0,
+                HasMyBarrier = hasMyBarrier,
                 Statuses = statuses,
             });
         }
 
+        // A stable layout the eye can rely on: yourself first, then tanks,
+        // healers, and dps, so a member never jumps slots mid-fight.
+        members.Sort((a, b) =>
+        {
+            if (a.IsSelf != b.IsSelf)
+                return a.IsSelf ? -1 : 1;
+
+            var order = RoleOrder(a.Role).CompareTo(RoleOrder(b.Role));
+            return order != 0 ? order : string.CompareOrdinal(a.Name, b.Name);
+        });
+
         return members;
+    }
+
+    private static int RoleOrder(byte role) => role switch
+    {
+        1 => 0, // tank
+        4 => 1, // healer
+        2 or 3 => 2, // dps
+        _ => 3,
+    };
+
+    private (string Abbreviation, byte Role) LookupJob(uint jobId)
+    {
+        if (data.GetExcelSheet<LuminaClassJob>().TryGetRow(jobId, out var row))
+            return (row.Abbreviation.ToString(), row.Role);
+
+        return ("", 0);
     }
 
     private HashSet<uint> ResolveTrackedIds()
@@ -146,15 +222,19 @@ public sealed class PartyTracker
         return ids;
     }
 
-    private string StatusName(uint statusId)
+    private (string Name, uint Icon, bool IsDebuff, bool IsPermanent) LookupStatus(uint statusId)
     {
         if (data.GetExcelSheet<LuminaStatus>().TryGetRow(statusId, out var row))
         {
             var name = row.Name.ToString();
-            if (!string.IsNullOrEmpty(name))
-                return name;
+            if (string.IsNullOrEmpty(name))
+                name = $"#{statusId}";
+
+            // StatusCategory 2 means debuff; 1 (and anything else) we treat as a
+            // buff. FC buffs ride along with permanents so the filter sweeps them up.
+            return (name, row.Icon, row.StatusCategory == 2, row.IsPermanent || row.IsFcBuff);
         }
 
-        return $"#{statusId}";
+        return ($"#{statusId}", 0, false, false);
     }
 }
