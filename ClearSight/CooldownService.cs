@@ -2,14 +2,17 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.UI.Misc;
+using LuminaAction = Lumina.Excel.Sheets.Action;
 
 namespace ClearSight;
 
 // Dalamud doesn't hand us cooldown timers through a tidy managed API, so we
 // reach into FFXIVClientStructs (which ships with Dalamud) and read the game's
-// own ActionManager directly. All the unsafe pointer work lives here and
-// nowhere else — when a game patch shifts these structs around, this is the one
-// file that needs fixing. Everything above it only ever sees CooldownInfo.
+// own ActionManager — and its hotbars — directly. All the unsafe pointer work
+// lives here and nowhere else; when a game patch shifts these structs around,
+// this is the one file that needs fixing. Everything above it only ever sees
+// CooldownInfo.
 
 /// <summary>
 /// A snapshot of one action's cooldown for a single frame — the only thing the
@@ -38,28 +41,60 @@ public readonly struct CooldownInfo
 }
 
 /// <summary>
-/// Reads action cooldowns from the game each frame. It keeps a set of action
-/// IDs we currently care about — for now that's filled in by hand, and the plan
-/// is to populate it automatically from the player's job.
+/// Watches the player's hotbars and reads the live cooldowns for whatever's
+/// slotted there. The tracked set rebuilds itself whenever the job changes, so
+/// the overlay always reflects the kit you're actually playing.
 /// </summary>
 public sealed unsafe class CooldownService : IDisposable
 {
-    private readonly IClientState clientState;
+    // The ActionCategory rows we care about telling apart. oGCDs are abilities;
+    // weaponskills and spells are the GCD actions a player can opt into showing.
+    private const uint Spell = 2;
+    private const uint Weaponskill = 3;
+    private const uint Ability = 4;
+
+    private readonly IPlayerState playerState;
     private readonly IDataManager dataManager;
     private readonly IPluginLog log;
 
-    private readonly HashSet<uint> trackedActionIds = new();
+    // Kept as an ordered list so the bars line up in a stable hotbar order
+    // rather than jumping around frame to frame.
+    private readonly List<uint> trackedActions = new();
 
-    public CooldownService(IClientState clientState, IDataManager dataManager, IPluginLog log)
+    // What the current tracked set was built for, so we know when it's stale.
+    private uint builtForJob = uint.MaxValue;
+    private bool builtIncludingGcd;
+
+    // Job swaps rebuild instantly, but re-slotting a skill doesn't announce
+    // itself, so we also refresh on a slow cadence to quietly pick those up.
+    private const int FramesBetweenRefreshes = 120;
+    private int framesSinceRefresh;
+
+    public CooldownService(IPlayerState playerState, IDataManager dataManager, IPluginLog log)
     {
-        this.clientState = clientState;
+        this.playerState = playerState;
         this.dataManager = dataManager;
         this.log = log;
     }
 
-    public void Track(uint actionId)   => trackedActionIds.Add(actionId);
-    public void Untrack(uint actionId) => trackedActionIds.Remove(actionId);
-    public IReadOnlyCollection<uint> Tracked => trackedActionIds;
+    /// <summary>
+    /// Makes sure the tracked set matches the current job and GCD preference,
+    /// rescanning the hotbars only when one of those has actually changed.
+    /// Cheap to call every frame.
+    /// </summary>
+    public void EnsureTracked(bool includeGcd)
+    {
+        var job = playerState.IsLoaded ? playerState.ClassJob.RowId : 0u;
+
+        var stale = job != builtForJob || includeGcd != builtIncludingGcd;
+        if (!stale && ++framesSinceRefresh < FramesBetweenRefreshes)
+            return;
+
+        RebuildFromHotbars(includeGcd);
+        builtForJob = job;
+        builtIncludingGcd = includeGcd;
+        framesSinceRefresh = 0;
+    }
 
     /// <summary>
     /// The live cooldown for one action, or null when the game isn't ready to
@@ -112,8 +147,8 @@ public sealed unsafe class CooldownService : IDisposable
     /// </summary>
     public List<CooldownInfo> SnapshotTracked()
     {
-        var result = new List<CooldownInfo>(trackedActionIds.Count);
-        foreach (var id in trackedActionIds)
+        var result = new List<CooldownInfo>(trackedActions.Count);
+        foreach (var id in trackedActions)
         {
             var info = GetCooldown(id);
             if (info.HasValue)
@@ -122,10 +157,57 @@ public sealed unsafe class CooldownService : IDisposable
         return result;
     }
 
+    // Walks every hotbar slot the player has, keeps the ones holding an action
+    // worth a bar, and rebuilds the tracked list in the order they're slotted.
+    private void RebuildFromHotbars(bool includeGcd)
+    {
+        trackedActions.Clear();
+
+        var hotbars = RaptureHotbarModule.Instance();
+        if (hotbars == null)
+            return;
+
+        var actions = dataManager.GetExcelSheet<LuminaAction>();
+        var seen = new HashSet<uint>();
+
+        // Standard hotbars are 0-9 and cross hotbars 10-17; each holds up to 16
+        // slots. Scanning all of them means we cover keyboard and controller
+        // layouts alike, and the dedupe keeps shared actions from doubling up.
+        for (uint bar = 0; bar < 18; bar++)
+        {
+            for (uint slot = 0; slot < 16; slot++)
+            {
+                var entry = hotbars->GetSlotById(bar, slot);
+                if (entry == null || entry->CommandType != RaptureHotbarModule.HotbarSlotType.Action)
+                    continue;
+
+                var id = entry->CommandId;
+                if (id == 0 || !seen.Add(id))
+                    continue;
+
+                if (WorthShowing(actions, id, includeGcd))
+                    trackedActions.Add(id);
+            }
+        }
+    }
+
+    private static bool WorthShowing(Lumina.Excel.ExcelSheet<LuminaAction> actions, uint actionId, bool includeGcd)
+    {
+        if (!actions.TryGetRow(actionId, out var action) || !action.IsPlayerAction)
+            return false;
+
+        var category = action.ActionCategory.RowId;
+
+        // oGCDs always earn a bar; the shared-GCD weaponskills and spells only
+        // show up when the player has opted into the clutter.
+        return category == Ability
+            || (includeGcd && (category == Weaponskill || category == Spell));
+    }
+
     public void Dispose()
     {
         // We don't own any of the game's memory, so there's nothing to free yet.
         // This is just a tidy home for cleanup once we add hooks or events.
-        trackedActionIds.Clear();
+        trackedActions.Clear();
     }
 }

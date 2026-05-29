@@ -20,6 +20,14 @@ public class MainWindow : Window, IDisposable
 
     public void Dispose() { }
 
+    // Closing the window from its title-bar X is just another way of turning the
+    // overlay off, so keep the saved setting honest about it.
+    public override void OnClose()
+    {
+        config.ShowOverlay = false;
+        config.Save();
+    }
+
     public override void PreDraw()
     {
         // Locking the overlay should make it feel like part of the HUD: no title
@@ -32,6 +40,8 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        plugin.Cooldowns.EnsureTracked(config.IncludeGcdActions);
+
         var cooldowns = plugin.Cooldowns.SnapshotTracked();
         var anythingDrawn = false;
 
