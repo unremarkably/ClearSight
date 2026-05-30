@@ -1,6 +1,6 @@
 # ClearSight
 
-A Dalamud plugin for FINAL FANTASY XIV that puts your action cooldowns on your HUD as little ticking-down bars, so you can see your recharges at a glance instead of squinting at your hotbars.
+A Dalamud plugin for FINAL FANTASY XIV with two parts: big, readable on-screen cooldown bars so you're not squinting at tiny hotbar timers, and a party panel built for healers (Sage especially) that shows everyone's HP and MP, who's shielded, and whether *your* barriers are still up on them — at a glance.
 
 > Heads up: this is still early in development, so expect rough edges.
 
@@ -14,13 +14,20 @@ ClearSight isn't on the official Dalamud plugin list, and I have no plans to put
 4. Paste my repository link into the empty box, hit the **+** button, then **Save and Close**:
 
    ```
-   PASTE-YOUR-REPO-URL-HERE
+   https://raw.githubusercontent.com/unremarkably/ClearSight/master/repo.json
    ```
 
-5. Open the plugin installer with `/xlplugins`, search for **ClearSight**, and click **Install**.
-6. That's it. Use `/clearsight` in chat to open the settings window.
+5. Open the plugin installer with `/xlplugins`, search for **Clear Sight**, and click **Install**.
 
 Once the repository is added it sticks around, so you'll get updates automatically and won't have to do this again.
+
+## Using it
+
+- `/clearsight` — toggle the cooldown bars.
+- `/clearsight party` — toggle the party panel.
+- `/clearsight config` — open settings.
+
+Both overlays are draggable; right-click either one to lock it in place once you've got it where you want it. On the party panel, left-click a member to target them and right-click for the usual menu (target, examine, promote, and so on).
 
 ## Credits
 

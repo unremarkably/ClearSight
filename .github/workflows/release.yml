@@ -1,0 +1,40 @@
+name: Release ClearSight
+
+# Push a version tag (e.g. v0.1.0) and this builds the plugin and publishes a
+# GitHub release with latest.zip attached. repo.json points at the newest
+# release, so your friends get the update automatically.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+
+    - name: Install .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Download Dalamud
+      run: |
+        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+        Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+    - name: Build with dotnet
+      run: dotnet build --configuration Release
+
+    - name: Publish release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: .\ClearSight\bin\x64\Release\ClearSight\latest.zip
+        generate_release_notes: true
+        fail_on_unmatched_files: true
