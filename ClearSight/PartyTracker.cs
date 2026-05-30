@@ -18,7 +18,12 @@ public readonly struct StatusInfo
     public uint IconId { get; init; }
 
     public float RemainingTime { get; init; }
+
+    /// <summary>Whatever the game packed into Param — only a real count when MaxStacks > 1.</summary>
     public ushort Stacks { get; init; }
+
+    /// <summary>How many stacks this status can hold; 1 (or 0) means it doesn't stack.</summary>
+    public byte MaxStacks { get; init; }
 
     /// <summary>True when the local player is the one who applied this status.</summary>
     public bool Mine { get; init; }
@@ -147,6 +152,7 @@ public sealed class PartyTracker
                     IconId = sheet.Icon,
                     RemainingTime = Math.Abs(status.RemainingTime),
                     Stacks = status.Param,
+                    MaxStacks = sheet.MaxStacks,
                     Mine = isMine,
                     IsTracked = isTracked,
                     IsDebuff = sheet.IsDebuff,
@@ -222,7 +228,7 @@ public sealed class PartyTracker
         return ids;
     }
 
-    private (string Name, uint Icon, bool IsDebuff, bool IsPermanent) LookupStatus(uint statusId)
+    private (string Name, uint Icon, bool IsDebuff, bool IsPermanent, byte MaxStacks) LookupStatus(uint statusId)
     {
         if (data.GetExcelSheet<LuminaStatus>().TryGetRow(statusId, out var row))
         {
@@ -232,9 +238,9 @@ public sealed class PartyTracker
 
             // StatusCategory 2 means debuff; 1 (and anything else) we treat as a
             // buff. FC buffs ride along with permanents so the filter sweeps them up.
-            return (name, row.Icon, row.StatusCategory == 2, row.IsPermanent || row.IsFcBuff);
+            return (name, row.Icon, row.StatusCategory == 2, row.IsPermanent || row.IsFcBuff, row.MaxStacks);
         }
 
-        return ($"#{statusId}", 0, false, false);
+        return ($"#{statusId}", 0, false, false, 0);
     }
 }

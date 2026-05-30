@@ -1,6 +1,8 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Textures;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 using LuminaAction = Lumina.Excel.Sheets.Action;
 
@@ -8,6 +10,10 @@ namespace ClearSight.Windows;
 
 public class MainWindow : Window, IDisposable
 {
+    // A calm blue that fills as the ability recharges — when the bar is full,
+    // it's ready. The big centered timer is the whole point: no more squinting.
+    private static readonly Vector4 CooldownFill = new(0.40f, 0.52f, 0.80f, 1f);
+
     private readonly Plugin plugin;
     private readonly Configuration config;
 
@@ -16,62 +22,102 @@ public class MainWindow : Window, IDisposable
     {
         this.plugin = plugin;
         this.config = plugin.Configuration;
+
+        // It's a HUD element, not a popup — don't let the Escape key close it.
+        RespectCloseHotkey = false;
     }
 
     public void Dispose() { }
 
-    // Closing the window from its title-bar X is just another way of turning the
-    // overlay off, so keep the saved setting honest about it.
-    public override void OnClose()
-    {
-        config.ShowOverlay = false;
-        config.Save();
-    }
-
     public override void PreDraw()
     {
-        // Locking the overlay should make it feel like part of the HUD: no title
-        // bar to grab, no background panel, and no accidental dragging.
+        // Chrome-free and transparent like the party panel; drag to move when
+        // unlocked, frozen in place when locked.
+        Flags |= ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoBackground;
         if (config.Locked)
-            Flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoBackground;
+            Flags |= ImGuiWindowFlags.NoMove;
         else
-            Flags &= ~(ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoBackground);
+            Flags &= ~ImGuiWindowFlags.NoMove;
     }
 
     public override void Draw()
     {
         plugin.Cooldowns.EnsureTracked(config.IncludeGcdActions);
-
         var cooldowns = plugin.Cooldowns.SnapshotTracked();
-        var anythingDrawn = false;
 
+        var anyDrawn = false;
         foreach (var cd in cooldowns)
         {
             if (config.HideReadyActions && cd.IsReady)
                 continue;
 
-            DrawBar(cd);
+            DrawCooldown(cd);
             ImGui.Dummy(new Vector2(0, config.BarSpacing));
-            anythingDrawn = true;
+            anyDrawn = true;
         }
 
-        if (!anythingDrawn)
+        if (!anyDrawn)
             ImGui.TextDisabled("Nothing on cooldown right now.");
+
+        HandleMenu();
     }
 
-    private void DrawBar(CooldownInfo cd)
+    private void DrawCooldown(CooldownInfo cd)
     {
-        var label = NameOf(cd.ActionId);
+        var iconSize = config.BarSize.Y;
 
-        // Off-charge actions read more naturally as "2.4s" than as a bare fraction,
-        // and charge-based actions get a "x2" so you can see banked stacks at a glance.
-        var caption = cd.CurrentCharges > 1
-            ? $"{label}  x{cd.CurrentCharges}"
-            : cd.Remaining > 0
-                ? $"{label}  {cd.Remaining:0.0}s"
-                : label;
+        ImGui.BeginGroup();
 
-        ImGui.ProgressBar(cd.Progress, config.BarSize, caption);
+        var iconPos = ImGui.GetCursorScreenPos();
+        var icon = Plugin.Textures.GetFromGameIcon(new GameIconLookup(IconOf(cd.ActionId))).GetWrapOrEmpty();
+        ImGui.Image(icon.Handle, new Vector2(iconSize, iconSize));
+
+        // Stacked actions show how many charges are banked in the icon corner.
+        if (cd.MaxCharges > 1)
+        {
+            var dl = ImGui.GetWindowDrawList();
+            var charges = cd.CurrentCharges.ToString();
+            dl.AddText(new Vector2(iconPos.X + 2, iconPos.Y + 1), ImGui.GetColorU32(OverlayBars.Shadow), charges);
+            dl.AddText(new Vector2(iconPos.X + 1, iconPos.Y), 0xFFFFFFFFu, charges);
+        }
+
+        ImGui.SameLine();
+
+        var label = cd.Remaining > 0 ? FormatTime(cd.Remaining) : string.Empty;
+        OverlayBars.Draw(config.BarSize.X, config.BarSize.Y, cd.Progress, CooldownFill, label);
+
+        ImGui.EndGroup();
+
+        // The icon already says which ability it is, so the name lives in a hover
+        // tooltip rather than crowding the bar.
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(NameOf(cd.ActionId));
+    }
+
+    private static string FormatTime(float seconds)
+        => seconds >= 10f ? $"{MathF.Ceiling(seconds):0}" : $"{seconds:0.0}";
+
+    private void HandleMenu()
+    {
+        if (ImGui.IsWindowHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+            ImGui.OpenPopup("cooldownMenu");
+
+        if (ImGui.BeginPopup("cooldownMenu"))
+        {
+            if (ImGui.MenuItem(config.Locked ? "Unlock bars" : "Lock bars"))
+            {
+                config.Locked = !config.Locked;
+                config.Save();
+            }
+            ImGui.EndPopup();
+        }
+    }
+
+    private static uint IconOf(uint actionId)
+    {
+        if (Plugin.DataManager.GetExcelSheet<LuminaAction>().TryGetRow(actionId, out var row))
+            return row.Icon;
+        return 0;
     }
 
     private static string NameOf(uint actionId)

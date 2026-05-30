@@ -19,8 +19,6 @@ public class PartyWindow : Window, IDisposable
     private static readonly Vector4 HpFull = new(0.36f, 0.76f, 0.37f, 1f);
     private static readonly Vector4 HpLow = new(0.83f, 0.58f, 0.25f, 1f);
     private static readonly Vector4 MpFill = new(0.35f, 0.51f, 0.77f, 1f);
-    private static readonly Vector4 BarTrack = new(0f, 0f, 0f, 0.55f);
-    private static readonly Vector4 Shadow = new(0f, 0f, 0f, 0.9f);
 
     private static readonly Vector4 TankColor = new(0.43f, 0.61f, 0.91f, 1f);
     private static readonly Vector4 HealerColor = new(0.44f, 0.88f, 0.60f, 1f);
@@ -45,6 +43,9 @@ public class PartyWindow : Window, IDisposable
             MinimumSize = new Vector2(200, 90),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+
+        // It's a HUD element, not a popup — don't let the Escape key close it.
+        RespectCloseHotkey = false;
     }
 
     public void Dispose() { }
@@ -187,13 +188,13 @@ public class PartyWindow : Window, IDisposable
         }
 
         // Row 2: HP bar with the overshield riding on top.
-        DrawBar(width, 18f * scale, member.HpFraction, member.ShieldPercent / 100f,
-            member.HpFraction < 0.5f ? HpLow : HpFull,
+        OverlayBars.Draw(width, 18f * scale, member.HpFraction, member.ShieldPercent / 100f,
+            member.HpFraction < 0.5f ? HpLow : HpFull, ShieldOverlay,
             BuildHpLabel(member, width));
 
         // Row 3: MP bar, taller when it carries a value so the text fits.
         var mpHasValue = config.ShowMpValue && member.MaxMp > 0;
-        DrawBar(width, (mpHasValue ? 13f : 6f) * scale, member.MpFraction, 0f, MpFill,
+        OverlayBars.Draw(width, (mpHasValue ? 13f : 6f) * scale, member.MpFraction, MpFill,
             mpHasValue ? BuildMpLabel(member, width) : "");
 
         DrawStatusIcons(member, width);
@@ -203,40 +204,6 @@ public class PartyWindow : Window, IDisposable
 
         ImGui.EndGroup();
         HandleInteraction(member);
-    }
-
-    private void DrawBar(float width, float height, float fraction, float shieldFraction, Vector4 fillColor, string label)
-    {
-        var dl = ImGui.GetWindowDrawList();
-        var p = ImGui.GetCursorScreenPos();
-        var max = new Vector2(p.X + width, p.Y + height);
-        const float rounding = 3f;
-
-        dl.AddRectFilled(p, max, ImGui.GetColorU32(BarTrack), rounding);
-
-        var fillW = width * Math.Clamp(fraction, 0f, 1f);
-        if (fillW > 0)
-            dl.AddRectFilled(p, new Vector2(p.X + fillW, max.Y), ImGui.GetColorU32(fillColor), rounding);
-
-        if (shieldFraction > 0)
-        {
-            var start = width * Math.Clamp(fraction, 0f, 1f);
-            var end = width * Math.Clamp(fraction + shieldFraction, 0f, 1f);
-            if (end > start)
-                dl.AddRectFilled(new Vector2(p.X + start, p.Y), new Vector2(p.X + end, max.Y), ImGui.GetColorU32(ShieldOverlay));
-        }
-
-        dl.AddRect(p, max, ImGui.GetColorU32(Shadow), rounding);
-
-        if (!string.IsNullOrEmpty(label))
-        {
-            var ts = ImGui.CalcTextSize(label);
-            var tp = new Vector2(p.X + (width - ts.X) * 0.5f, p.Y + (height - ts.Y) * 0.5f);
-            dl.AddText(new Vector2(tp.X + 1, tp.Y + 1), ImGui.GetColorU32(Shadow), label);
-            dl.AddText(tp, 0xFFFFFFFFu, label);
-        }
-
-        ImGui.Dummy(new Vector2(width, height));
     }
 
     private void DrawStatusIcons(PartyMemberInfo member, float width)
@@ -260,8 +227,16 @@ public class PartyWindow : Window, IDisposable
             if (i > 0 && i % perRow != 0)
                 ImGui.SameLine();
 
+            // A status only counts as stacking when the sheet says so — otherwise
+            // Param holds unrelated data we shouldn't read as a stack number. The
+            // game also lays out one icon per stack, so we step the icon to match.
+            var stacks = status.MaxStacks > 1 ? status.Stacks : (ushort)0;
+            var iconId = status.IconId;
+            if (stacks > 1)
+                iconId += (uint)Math.Min(stacks - 1, status.MaxStacks - 1);
+
             var p = ImGui.GetCursorScreenPos();
-            var tex = Plugin.Textures.GetFromGameIcon(new GameIconLookup(status.IconId)).GetWrapOrEmpty();
+            var tex = Plugin.Textures.GetFromGameIcon(new GameIconLookup(iconId)).GetWrapOrEmpty();
             ImGui.Image(tex.Handle, new Vector2(size, size));
 
             if (status.IsTracked && status.Mine)
@@ -272,15 +247,15 @@ public class PartyWindow : Window, IDisposable
                 var time = status.RemainingTime >= 10 ? $"{status.RemainingTime:0}" : $"{status.RemainingTime:0.0}";
                 var ts = ImGui.CalcTextSize(time);
                 var tp = new Vector2(p.X + (size - ts.X) * 0.5f, p.Y + size - ts.Y);
-                dl.AddText(new Vector2(tp.X + 1, tp.Y + 1), ImGui.GetColorU32(Shadow), time);
+                dl.AddText(new Vector2(tp.X + 1, tp.Y + 1), ImGui.GetColorU32(OverlayBars.Shadow), time);
                 dl.AddText(tp, 0xFFFFFFFFu, time);
             }
 
-            if (status.Stacks > 1)
+            if (stacks > 1)
             {
-                var stacks = status.Stacks.ToString();
-                dl.AddText(new Vector2(p.X + 2, p.Y + 1), ImGui.GetColorU32(Shadow), stacks);
-                dl.AddText(new Vector2(p.X + 1, p.Y), 0xFFFFFFFFu, stacks);
+                var label = stacks.ToString();
+                dl.AddText(new Vector2(p.X + 2, p.Y + 1), ImGui.GetColorU32(OverlayBars.Shadow), label);
+                dl.AddText(new Vector2(p.X + 1, p.Y), 0xFFFFFFFFu, label);
             }
         }
     }
