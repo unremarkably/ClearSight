@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
@@ -15,6 +16,7 @@ public class PartyWindow : Window, IDisposable
     private static readonly Vector4 BarrierMissing = new(1f, 0.35f, 0.35f, 1f);
     private static readonly Vector4 ShieldTint = new(1f, 0.88f, 0.40f, 1f);
     private static readonly Vector4 ShieldOverlay = new(1f, 0.88f, 0.40f, 0.7f);
+    private static readonly Vector4 CrownColor = new(1f, 0.82f, 0.30f, 1f);
 
     private static readonly Vector4 HpFull = new(0.36f, 0.76f, 0.37f, 1f);
     private static readonly Vector4 HpLow = new(0.83f, 0.58f, 0.25f, 1f);
@@ -31,6 +33,14 @@ public class PartyWindow : Window, IDisposable
     // Set while drawing if the cursor is over a member, so a right-click on empty
     // space can tell itself apart from a right-click on someone.
     private bool memberHovered;
+
+    // Whether the local player can hand out leader/kick — refreshed each frame.
+    private bool localIsLeader;
+
+    // The panel's own rectangle, captured each frame so the native menu can be
+    // opened just outside it (it would otherwise hide behind the panel).
+    private Vector2 panelPos;
+    private Vector2 panelSize;
 
     public PartyWindow(Plugin plugin)
         : base("ClearSight Party###ClearSightParty", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -70,6 +80,8 @@ public class PartyWindow : Window, IDisposable
     public override void Draw()
     {
         memberHovered = false;
+        panelPos = ImGui.GetWindowPos();
+        panelSize = ImGui.GetWindowSize();
 
         if (config.PartyHeaderVisible)
             DrawHeader();
@@ -81,6 +93,11 @@ public class PartyWindow : Window, IDisposable
             HandlePanelMenu();
             return;
         }
+
+        localIsLeader = false;
+        foreach (var m in party)
+            if (m.IsSelf && m.IsLeader)
+                localIsLeader = true;
 
         var width = MathF.Max(ImGui.GetContentRegionAvail().X, 200f);
         for (var i = 0; i < party.Count; i++)
@@ -179,6 +196,15 @@ public class PartyWindow : Window, IDisposable
         var nameY = ImGui.GetCursorPosY() + (iconSize - ImGui.GetTextLineHeight()) * 0.5f;
         ImGui.SetCursorPosY(nameY);
         ImGui.TextColored(RoleColor(member.Role), member.Name);
+
+        if (member.IsLeader)
+        {
+            ImGui.SameLine();
+            ImGui.SetCursorPosY(nameY);
+            ImGui.PushFont(UiBuilder.IconFont);
+            ImGui.TextColored(CrownColor, FontAwesomeIcon.Crown.ToIconString());
+            ImGui.PopFont();
+        }
 
         if (member.ShieldPercent > 0)
         {
@@ -347,20 +373,63 @@ public class PartyWindow : Window, IDisposable
                 ImGui.OpenPopup(popupId);
         }
 
+        // Our own menu (it renders above the panel — the native one would open
+        // behind it) wired to the real game functions.
         if (ImGui.BeginPopup(popupId))
         {
-            ImGui.TextDisabled(member.Name);
+            ImGui.TextColored(RoleColor(member.Role), member.Name);
             ImGui.Separator();
+
             if (ImGui.MenuItem("Target"))
                 plugin.TargetMember(member.EntityId);
             if (ImGui.MenuItem("Focus Target"))
                 plugin.FocusMember(member.EntityId);
             if (ImGui.MenuItem("Examine"))
                 plugin.ExamineMember(member.EntityId);
+
+            // Promote/kick only when you're the leader and it's another real
+            // player — the game still asks for confirmation.
+            if (localIsLeader && !member.IsSelf && member.ContentId != 0)
+            {
+                ImGui.Separator();
+                if (ImGui.MenuItem("Promote to leader"))
+                    plugin.PromoteMember(member.Name, member.ContentId);
+                if (ImGui.MenuItem("Kick from party"))
+                    plugin.KickMember(member.Name, member.ContentId);
+            }
+
+            if (member.IsSelf)
+            {
+                ImGui.Separator();
+                if (ImGui.MenuItem("Leave party"))
+                    plugin.LeaveParty();
+            }
+
+            ImGui.Separator();
+            if (ImGui.MenuItem("More options…"))
+                OpenNativeMenuBesidePanel(member.EntityId);
+
             ImGui.Separator();
             DrawPanelMenuItems();
             ImGui.EndPopup();
         }
+    }
+
+    // Place the native menu just past the panel's edge so it isn't covered —
+    // to the right normally, flipping left when there's no room there.
+    private void OpenNativeMenuBesidePanel(uint entityId)
+    {
+        const float estimatedMenuWidth = 220f;
+        var displayWidth = ImGui.GetIO().DisplaySize.X;
+
+        var x = panelPos.X + panelSize.X + 4f;
+        if (x + estimatedMenuWidth > displayWidth)
+            x = panelPos.X - estimatedMenuWidth - 4f;
+        if (x < 0)
+            x = panelPos.X + panelSize.X + 4f;
+
+        var y = ImGui.GetMousePos().Y;
+        plugin.OpenNativeContextMenu(entityId, (int)x, (int)y);
     }
 
     // Right-clicking empty panel space (not a member) still gets you the menu —

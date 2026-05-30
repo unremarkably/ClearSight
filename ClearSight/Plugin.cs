@@ -5,7 +5,9 @@ using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using ClearSight.Windows;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using FFXIVClientStructs.FFXIV.Client.UI.Info;
 
 namespace ClearSight;
 
@@ -19,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable Objects { get; private set; } = null!;
     [PluginService] internal static ITargetManager Targets { get; private set; } = null!;
     [PluginService] internal static ITextureProvider Textures { get; private set; } = null!;
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/clearsight";
@@ -112,9 +115,8 @@ public sealed class Plugin : IDalamudPlugin
         PartyWindow.IsOpen = visible;
     }
 
-    // The party panel's interactions, the same ones the native frames give you.
-    // Each resolves the member fresh from their entity id, so a stale snapshot
-    // can never point us at the wrong character.
+    // The party panel's interactions. Each resolves the member fresh from their
+    // entity id, so a stale snapshot can never point us at the wrong character.
     public void TargetMember(uint entityId)
     {
         var obj = Objects.SearchByEntityId(entityId);
@@ -130,7 +132,36 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     public unsafe void ExamineMember(uint entityId)
+        => AgentInspect.Instance()->ExamineCharacter(entityId, false);
+
+    // Promote, kick, and leave go through the game's own functions, deferred to
+    // the framework tick — they fire packets and confirm dialogs that shouldn't
+    // run mid-render. The game still shows its usual yes/no confirmation.
+    public void PromoteMember(string name, ulong contentId)
+        => Framework.RunOnFrameworkThread(() => { unsafe { AgentPartyMember.Instance()->Promote(name, 0, contentId); } });
+
+    public void KickMember(string name, ulong contentId)
+        => Framework.RunOnFrameworkThread(() => { unsafe { AgentPartyMember.Instance()->Kick(name, 0, contentId); } });
+
+    public void LeaveParty()
+        => Framework.RunOnFrameworkThread(() => { unsafe { InfoProxyPartyMember.Instance()->LeaveParty(); } });
+
+    // The full native context menu — every option the game offers, correctly
+    // gated. It renders in the game's layer (behind our ImGui panel), so we open
+    // it at a screen point the caller has placed clear of the panel.
+    public void OpenNativeContextMenu(uint entityId, int x, int y)
     {
-        AgentInspect.Instance()->ExamineCharacter(entityId, false);
+        Framework.RunOnFrameworkThread(() =>
+        {
+            var obj = Objects.SearchByEntityId(entityId);
+            if (obj == null)
+                return;
+
+            unsafe
+            {
+                AgentHUD.Instance()->OpenContextMenuFromTarget((GameObject*)obj.Address);
+                AgentContext.Instance()->SetPosition(x, y);
+            }
+        });
     }
 }

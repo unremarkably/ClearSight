@@ -50,6 +50,12 @@ public readonly struct PartyMemberInfo
     /// <summary>Used to look the member up again when you click to target them.</summary>
     public uint EntityId { get; init; }
 
+    /// <summary>Stable id the promote/kick calls need to name the right player.</summary>
+    public ulong ContentId { get; init; }
+
+    /// <summary>True if this member is the current party leader.</summary>
+    public bool IsLeader { get; init; }
+
     /// <summary>The ClassJob role: 1 tank, 2/3 dps, 4 healer, 0 other.</summary>
     public byte Role { get; init; }
 
@@ -120,6 +126,17 @@ public sealed class PartyTracker
         var tracked = ResolveTrackedIds();
         var mine = objects.LocalPlayer?.EntityId ?? 0;
 
+        // Whoever sits at the leader index is the leader; remember them so each
+        // member knows, and so we can tell whether *you* can promote/kick.
+        uint leaderEntity = 0;
+        var leaderIndex = (int)partyList.PartyLeaderIndex;
+        if (leaderIndex >= 0 && leaderIndex < partyList.Length)
+        {
+            var leader = partyList[leaderIndex];
+            if (leader != null)
+                leaderEntity = leader.EntityId;
+        }
+
         var members = new List<PartyMemberInfo>(partyList.Length);
         foreach (var member in partyList)
         {
@@ -168,6 +185,8 @@ public sealed class PartyTracker
                 Job = job.Abbreviation,
                 JobId = member.ClassJob.RowId,
                 EntityId = member.EntityId,
+                ContentId = member.ContentId,
+                IsLeader = leaderEntity != 0 && member.EntityId == leaderEntity,
                 Role = job.Role,
                 IsSelf = member.EntityId == mine,
                 CurrentHp = member.CurrentHP,
